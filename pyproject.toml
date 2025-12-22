@@ -1,0 +1,18 @@
+[project]
+name = "dqn"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "autorom[accept-rom-license]>=0.6.1",
+    "gymnasium[atari,other]>=1.2.2",
+    "numpy>=2.3.5",
+    "pydantic>=2.12.5",
+    "pyyaml>=6.0.3",
+    "torch>=2.9.1",
+    "tqdm>=4.67.1",
+]
+
+[tool.setuptools]
+packages = ["dqn"]

@@ -1,0 +1,17 @@
+scheduler:
+  start: 1.0
+  end: 0.1
+  decay_period: 1000000
+
+replay_buffer:
+  capacity: 1000000
+  agent_history_length: 4
+
+agent:
+  batch_size: 32
+  gamma: 0.99
+  steps: 50000000
+  target_update_frequency: 10000
+  update_frequency: 4
+  warmup_steps: 50000
+
