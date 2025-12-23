@@ -64,6 +64,7 @@ def main(
         replay_buffer=replay_buffer,
         model=model,
         target_model=target_model,
+        device=device,
     )
     agent.warmup()
     agent.train()
@@ -73,7 +74,7 @@ if __name__ == "__main__":
     args = vars(parser.parse_args())
     train_config = TrainConfig.from_yaml(args["config"])
     env_name = args["env"] or "ALE/Breakout-v5"
-    env = gym.make(env_name, frameskip=4, render_mode="human")
+    env = gym.make(env_name, frameskip=4, render_mode=None)
     env.close()
     env = GrayscaleObservation(env, keep_dim=False)
     # NOTE original paper mentions reshaping to (100,84) and then cropping to (84, 84)
