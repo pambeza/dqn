@@ -53,6 +53,7 @@ class Agent:
 
         self.episode_count = 0
         self.episode_reward = 0
+        self.max_frame_number = 0
 
     def _set_initial_state(self) -> np.ndarray:
         state, _ = self.env.reset()
@@ -69,8 +70,10 @@ class Agent:
             else:
                 action = self.model.policy(state)
             new_state, reward, done, truncated, info = self.env.step(action)
+            episode_frame_number = info["episode_frame_number"]
+            self.max_frame_number = episode_frame_number
             self.replay_buffer.store_experience(
-                action, reward, done, new_state[-1:], info["episode_frame_number"]
+                action, reward, done, new_state[-1:], episode_frame_number
             )
             self.episode_reward += reward
             if done:
@@ -80,7 +83,11 @@ class Agent:
                     writer.add_scalar(
                         "Episode reward", self.episode_reward, self.episode_count
                     )
+                    writer.add_scalar(
+                        "Maximum frame number", self.max_frame_number, self.episode_count
+                    )
                     self.episode_reward = 0
+                    self.max_frame_number = 0
             self.state = new_state
 
     def warmup(self) -> None:
@@ -133,7 +140,7 @@ class Agent:
                 loss = self._learn()
                 pbar.update(self.update_frequency)
                 pbar.set_postfix(
-                    loss=loss.item(),
+                    ,
                     update=f"{self.learning_steps_counter}/{self.train_steps}",
                 )
                 self.learning_steps_counter += 1
