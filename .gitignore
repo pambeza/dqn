@@ -11,4 +11,4 @@ wheels/
 
 # Notebooks
 .ipynb_checkpoints
-test.ipynb
+*.ipynb
