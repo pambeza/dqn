@@ -106,11 +106,11 @@ class Agent:
             current_states, actions, rewards, dones, next_states = (
                 self.replay_buffer.get_experience_samples(self.batch_size)
             )
-            current_states = current_states.to(self.device)
-            actions = actions.to(self.device)
-            rewards = rewards.to(self.device)
-            dones = dones.to(self.device)
-            next_states = next_states.to(self.device)
+            current_states = current_states.to(self.device, non_blocking=True)
+            actions = actions.to(self.device, non_blocking=True)
+            rewards = rewards.to(self.device, non_blocking=True)
+            dones = dones.to(self.device, non_blocking=True)
+            next_states = next_states.to(self.device, non_blocking=True)
             target_q_values = self._compute_target_q_values(next_states, rewards, dones)
 
         outputs = self.model(current_states)
@@ -119,7 +119,7 @@ class Agent:
         loss = self.loss_fn(target_q_values, current_state_q_values)
         self.optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
         self.optimizer.step()
         return loss
 

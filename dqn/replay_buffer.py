@@ -1,6 +1,6 @@
 import numpy as np
-from pydantic import BaseModel, PositiveInt
 import torch
+from pydantic import BaseModel, PositiveInt
 
 
 class ReplayBufferConfig(BaseModel):
@@ -27,7 +27,14 @@ class ReplayBuffer:
         self.frames[self.pos] = frame
         self.frame_numbers[self.pos] = 0
 
-    def store_experience(self, action: int, reward: float, done: bool, next_frame: np.ndarray, next_frame_number: int):
+    def store_experience(
+        self,
+        action: int,
+        reward: float,
+        done: bool,
+        next_frame: np.ndarray,
+        next_frame_number: int,
+    ):
         self.actions[self.pos] = action
         self.rewards[self.pos] = reward
         self.dones[self.pos] = done
@@ -42,7 +49,7 @@ class ReplayBuffer:
 
     def _sample_indices(self, batch_size: int) -> np.ndarray:
         """Randomly select indices from the replay memory.
-        
+
         Indices selection follows these rules:
             - Avoid picking an index in [pos - history_length, pos] to avoid mixing transitions from different episodes.
             - Avoid picking an index for which s_t+1 does not exist (i.e. the last transition of an episode).
@@ -78,20 +85,34 @@ class ReplayBuffer:
 
         return np.array(list(indices))
 
-    def _get_state(self, index: int) -> np.ndarray:
-        """Get the state at the given index."""
-        current_frame_number = self.frame_numbers[index]
-        state = []
-        for i in range(self.agent_history_length - 1, -1, -1):
-            prev_idx = (index - i) % self.capacity
-            # Previous frame is actually a future frame
-            if self.frame_numbers[prev_idx] > current_frame_number:
-                state.append(self.frames[index])
-            else:
-                state.append(self.frames[prev_idx])
+    def _get_batch_states(self, indices: np.ndarray) -> np.ndarray:
+        """Get the states for a batch of indices by modifying indices first."""
+        batch_size = len(indices)
+        
+        # Create array of history indices, e.g [998, 999, 0, 1] for index 1
+        offsets = np.arange(self.agent_history_length) - (self.agent_history_length - 1)
+        history_indices = (indices[:, None] + offsets) % self.capacity
 
-        state = np.stack(state, axis=0)
-        return state
+        # Get array of valid indices by comparing history frame numbers to index frame number
+        current_frame_numbers = self.frame_numbers[indices]
+        history_frame_numbers = self.frame_numbers[history_indices]
+        valid_mask = history_frame_numbers <= current_frame_numbers[:, None]
+
+        # Get the first valid index for each row
+        first_valid_relative_idx = np.argmax(valid_mask, axis=1)
+        
+        # Get array of first valid frame index for each row
+        fill_indices = history_indices[np.arange(batch_size), first_valid_relative_idx]
+
+        # 5. Remplacer TOUS les indices invalides par les fill_indices correspondants
+        # Replace all invalid indices by the first valid frame indices
+        invalid_mask = ~valid_mask
+        filler = np.repeat(fill_indices[:, None], self.agent_history_length, axis=1)
+        history_indices[invalid_mask] = filler[invalid_mask]
+
+        states = self.frames[history_indices]
+            
+        return states
 
     def get_experience_samples(self, batch_size: int = 32):
         """Randomly select experiences from the replay memory.
@@ -104,24 +125,22 @@ class ReplayBuffer:
 
         Returns:
             A tuple of 5 elements:
-                - Numpy array of selected states
-                - Numpy array of selected actions
-                - Numpy array of selected rewards
-                - Numpy array of selected dones
-                - Numpy array of selected next states
+                - Tensor of selected states
+                - Tensor of selected actions
+                - Tensor of selected rewards
+                - Tensor of selected dones
+                - Tensor of selected next states
         """
         indices = self._sample_indices(batch_size)
-        states = []
-        next_states = []
-        for idx in indices:
-            states.append(self._get_state(idx))
-            next_state_idx = (idx + 1) % self.capacity
-            next_states.append(self._get_state(next_state_idx))
+        next_indices = (indices + 1) % self.capacity
+
+        states = self._get_batch_states(indices)
+        next_states = self._get_batch_states(next_indices)
 
         return (
-            torch.from_numpy(np.array(states)).to(torch.float32),
+            torch.from_numpy(states).to(torch.float32),
             torch.from_numpy(self.actions[indices]).to(torch.int32),
             torch.from_numpy(self.rewards[indices]),
-            torch.from_numpy(self.dones[indices]).to(torch.uint8),
-            torch.from_numpy(np.array(next_states)).to(torch.float32),
+            torch.from_numpy(self.dones[indices]).to(torch.float32),
+            torch.from_numpy(next_states).to(torch.float32),
         )
