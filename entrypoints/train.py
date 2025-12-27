@@ -80,7 +80,7 @@ def main(config: TrainConfig, env: gym.Env, device: str, saved_model_path: str):
     )
     agent.warmup()
     agent.train()
-    torch.save(agent.model.state_dict(), "dqn.pt")
+    torch.save(agent.model.state_dict(), saved_model_path)
 
 
 if __name__ == "__main__":
@@ -93,4 +93,4 @@ if __name__ == "__main__":
     # NOTE original paper mentions reshaping to (100,84) and then cropping to (84, 84)
     env = ResizeObservation(env, shape=(84, 84))
     env = FrameStackObservation(env, stack_size=4)
-    main(config=train_config, env=env, device=args["device"])
+    main(config=train_config, env=env, device=args["device"], saved_model_path=args["saved_model_path"])
