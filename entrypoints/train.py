@@ -54,7 +54,8 @@ parser.add_argument(
     "-p",
     dest="saved_model_path",
     type=Path,
-    default="Path where the trained model will be saved.",
+    default="model.pt",
+    help="Path where the trained model will be saved.",
 )
 
 

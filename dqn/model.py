@@ -6,7 +6,6 @@ import torch.nn.functional as F
 from dqn.scheduler import EpsilonScheduler
 
 
-
 class Model(nn.Module):
     def __init__(
         self,
