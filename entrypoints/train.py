@@ -1,4 +1,3 @@
-import logging
 from argparse import ArgumentParser
 from pathlib import Path
 
@@ -18,10 +17,6 @@ from gymnasium.wrappers import (
 )
 from pydantic import BaseModel
 
-gym.register_envs(ale_py)
-
-logging.basicConfig(level=logging.DEBUG)
-
 
 class TrainConfig(BaseModel):
     scheduler: SchedulerConfig = SchedulerConfig()
@@ -36,21 +31,38 @@ class TrainConfig(BaseModel):
 
 
 parser = ArgumentParser(prog="DQN", description="Train DQN model")
-parser.add_argument("--config", "-c", dest="config", type=Path, help="Path to the training configuration file.")
-parser.add_argument("--env", "-e", dest="env", type=str, default=None, help="Gymnasium environment")
-parser.add_argument("--device", "-d", dest="device", type=str, default="cpu", help="Torch device to use.")
+parser.add_argument(
+    "--config",
+    "-c",
+    dest="config",
+    type=Path,
+    help="Path to the training configuration file.",
+)
+parser.add_argument(
+    "--env", "-e", dest="env", type=str, default=None, help="Gymnasium environment"
+)
+parser.add_argument(
+    "--device",
+    "-d",
+    dest="device",
+    type=str,
+    default="cpu",
+    help="Torch device to use.",
+)
+parser.add_argument(
+    "--path",
+    "-p",
+    dest="saved_model_path",
+    type=Path,
+    default="Path where the trained model will be saved.",
+)
 
 
-def main(
-    config: TrainConfig,
-    env: gym.Env,
-    device: str,
-):
+def main(config: TrainConfig, env: gym.Env, device: str, saved_model_path: str):
     device = torch.device(device)
     scheduler = LinearEpsilonScheduler(train_config.scheduler)
     model = Model(nb_valid_actions=env.action_space.n, epsilon_scheduler=scheduler)
     model.to(device)
-    # TODO make scheduler optional or maybe copy first model
     target_model = Model(
         nb_valid_actions=env.action_space.n, epsilon_scheduler=scheduler
     )
@@ -68,14 +80,15 @@ def main(
     )
     agent.warmup()
     agent.train()
+    torch.save(agent.model.state_dict(), "dqn.pt")
 
 
 if __name__ == "__main__":
+    gym.register_envs(ale_py)
     args = vars(parser.parse_args())
     train_config = TrainConfig.from_yaml(args["config"])
     env_name = args["env"] or "ALE/Breakout-v5"
     env = gym.make(env_name, frameskip=4, render_mode=None)
-    env.close()
     env = GrayscaleObservation(env, keep_dim=False)
     # NOTE original paper mentions reshaping to (100,84) and then cropping to (84, 84)
     env = ResizeObservation(env, shape=(84, 84))

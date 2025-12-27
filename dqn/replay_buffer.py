@@ -88,7 +88,7 @@ class ReplayBuffer:
     def _get_batch_states(self, indices: np.ndarray) -> np.ndarray:
         """Get the states for a batch of indices by modifying indices first."""
         batch_size = len(indices)
-        
+
         # Create array of history indices, e.g [998, 999, 0, 1] for index 1
         offsets = np.arange(self.agent_history_length) - (self.agent_history_length - 1)
         history_indices = (indices[:, None] + offsets) % self.capacity
@@ -100,7 +100,7 @@ class ReplayBuffer:
 
         # Get the first valid index for each row
         first_valid_relative_idx = np.argmax(valid_mask, axis=1)
-        
+
         # Get array of first valid frame index for each row
         fill_indices = history_indices[np.arange(batch_size), first_valid_relative_idx]
 
@@ -111,7 +111,7 @@ class ReplayBuffer:
         history_indices[invalid_mask] = filler[invalid_mask]
 
         states = self.frames[history_indices]
-            
+
         return states
 
     def get_experience_samples(self, batch_size: int = 32):

@@ -1,5 +1,3 @@
-import logging
-
 from dqn.model import Model
 from dqn.replay_buffer import ReplayBuffer
 
@@ -31,7 +29,7 @@ class Agent:
         model: Model,
         target_model: Model,
         device: torch.device,
-    ):
+    ) -> None:
         self.warmup_steps = config.warmup_steps
         self.train_steps = config.steps - self.warmup_steps
         self.update_frequency = config.update_frequency
@@ -56,15 +54,23 @@ class Agent:
         self.max_frame_number = 0
 
     def _set_initial_state(self) -> np.ndarray:
+        """Reset the agent's environment and store the initial frame in the replay buffer."""
         state, _ = self.env.reset()
         self.replay_buffer.store_initial_frame(state[-1:])
         return state
 
     def experiment(
-        self, warming_up: bool = False, device: torch.device = "cpu"
+        self, warming_up: bool = False
     ) -> None:
+        """Make the agent act on its environment as many times as self.udpate_frequency
+        and store state transitions in the replay buffer.
+
+        Args:
+            warming_up: If set to True, actions are sampled from the environment action space. 
+                Otherwise, the model policy is used.Defaults to False.
+        """
         for _ in range(self.update_frequency):
-            state = torch.from_numpy(self.state).to(device)
+            state = torch.from_numpy(self.state).to(self.device)
             if warming_up:
                 action = self.env.action_space.sample()
             else:
@@ -84,7 +90,9 @@ class Agent:
                         "Episode reward", self.episode_reward, self.episode_count
                     )
                     writer.add_scalar(
-                        "Maximum frame number", self.max_frame_number, self.episode_count
+                        "Maximum frame number",
+                        self.max_frame_number,
+                        self.episode_count,
                     )
                     self.episode_reward = 0
                     self.max_frame_number = 0
@@ -97,7 +105,9 @@ class Agent:
                 self.experiment(warming_up=True, device=self.device)
                 pbar.update(self.update_frequency)
 
-    def _compute_target_q_values(self, next_states, rewards, dones) -> torch.Tensor:
+    def _compute_target_q_values(
+        self, next_states: torch.Tensor, rewards: torch.Tensor, dones: torch.Tensor
+    ) -> torch.Tensor:
         next_state_max_q_values = self.target_model(next_states).max(
             dim=1, keepdim=True
         )[0]
@@ -126,7 +136,7 @@ class Agent:
         loss = self.loss_fn(target_q_values, current_state_q_values)
         self.optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
         self.optimizer.step()
         return loss
 
@@ -136,7 +146,7 @@ class Agent:
         self.target_model.to(self.device)
         with tqdm(total=self.train_steps) as pbar:
             for _ in range(0, self.train_steps, self.update_frequency):
-                self.experiment(device=self.device)
+                self.experiment()
                 loss = self._learn()
                 pbar.update(self.update_frequency)
                 pbar.set_postfix(
@@ -145,6 +155,4 @@ class Agent:
                 )
                 self.learning_steps_counter += 1
                 if self.learning_steps_counter % self.target_update_frequency == 0:
-                    logging.debug("Updating target model weights")
                     self.target_model.load_state_dict(self.model.state_dict())
-        torch.save(self.model.state_dict(), "dqn.pt")
