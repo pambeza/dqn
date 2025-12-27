@@ -140,7 +140,7 @@ class Agent:
                 loss = self._learn()
                 pbar.update(self.update_frequency)
                 pbar.set_postfix(
-                    ,
+                    loss=loss,
                     update=f"{self.learning_steps_counter}/{self.train_steps}",
                 )
                 self.learning_steps_counter += 1
