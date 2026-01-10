@@ -14,7 +14,6 @@ from gymnasium.wrappers import (
     ResizeObservation,
 )
 
-# Register envs
 gym.register_envs(ale_py)
 
 parser = ArgumentParser(prog="DQN", description="Evaluate DQN.")
@@ -40,28 +39,27 @@ parser.add_argument(
 
 
 def main(model_path: Path, steps: int, device: str):
-    scheduler = ConstantScheduler(0.05)
-    model = Model(4, scheduler)
-    model.load_state_dict(
-        torch.load(model_path.as_posix(), map_location=torch.device(device))
-    )
-    model.eval()
-
     env = gym.make("ALE/Breakout-v5", render_mode="human")
     env = GrayscaleObservation(env, keep_dim=False)
     env = ResizeObservation(env, shape=(84, 84))
     env = FrameStackObservation(env, stack_size=4)
 
-    state, _ = env.reset()
+    scheduler = ConstantScheduler(0.05)
+    model = Model(env.action_space.n, scheduler)
+    model.load_state_dict(
+        torch.load(model_path.as_posix(), map_location=torch.device(device))
+    )
+    model.eval()
 
+    state, _ = env.reset()
     for _ in range(steps):
         state_tensor = (
             torch.from_numpy(np.array(state)).to(torch.float32).unsqueeze(dim=0)
         )
         q_values = model(state_tensor)
         action = q_values.argmax(dim=1).item()
-        state, reward, done, truncated, _ = env.step(action)
-
+        state, reward, done, truncated, info = env.step(action)
+        
         if done or truncated:
             state, _ = env.reset()
 

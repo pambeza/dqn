@@ -16,6 +16,7 @@ from gymnasium.wrappers import (
     ResizeObservation,
 )
 from pydantic import BaseModel
+import torch
 
 
 class TrainConfig(BaseModel):
@@ -71,6 +72,8 @@ def main(config: TrainConfig, env: gym.Env, device: str, saved_model_path: str):
     replay_buffer = ReplayBuffer(
         config.replay_buffer, frame_shape=env.observation_space.shape[1:]
     )
+    model = torch.compile(model, fullgraph=True)
+    target_model = torch.compile(model, fullgraph=True)
     agent = Agent(
         config=config.agent,
         env=env,

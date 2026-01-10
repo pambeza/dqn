@@ -69,7 +69,8 @@ class ReplayBuffer:
             )
 
         indices = set()
-        while len(indices) < batch_size:
+        for _ in range(batch_size):
+        # while len(indices) < batch_size:
             idx = np.random.randint(0, upper_bound)
 
             if self.full:
@@ -111,10 +112,11 @@ class ReplayBuffer:
         history_indices[invalid_mask] = filler[invalid_mask]
 
         states = self.frames[history_indices]
-
         return states
 
-    def get_experience_samples(self, batch_size: int = 32):
+    def get_experience_samples(
+        self, batch_size: int = 32
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Randomly select experiences from the replay memory.
 
         Args:
@@ -125,11 +127,11 @@ class ReplayBuffer:
 
         Returns:
             A tuple of 5 elements:
-                - Tensor of selected states
-                - Tensor of selected actions
-                - Tensor of selected rewards
-                - Tensor of selected dones
-                - Tensor of selected next states
+                - Tensor of selected states of shape (batch_size, agent_history_length, height, width)
+                - Tensor of selected actions of shape (batch_size, 1)
+                - Tensor of selected rewards of shape (batch_size, 1)
+                - Tensor of selected dones of shape (batch_size, 1)
+                - Tensor of selected next states of shape (batch_size, agent_history_length, height, width)
         """
         indices = self._sample_indices(batch_size)
         next_indices = (indices + 1) % self.capacity

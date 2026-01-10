@@ -90,7 +90,7 @@ class Agent:
                         "Episode reward", self.episode_reward, self.episode_count
                     )
                     writer.add_scalar(
-                        "Maximum frame number",
+                        "Maximum episode frame number",
                         self.max_frame_number,
                         self.episode_count,
                     )
@@ -102,7 +102,7 @@ class Agent:
         """Warm up the agent by performing random actions."""
         with tqdm(total=self.warmup_steps) as pbar:
             for _ in range(0, self.warmup_steps, self.update_frequency):
-                self.experiment(warming_up=True, device=self.device)
+                self.experiment(warming_up=True)
                 pbar.update(self.update_frequency)
 
     def _compute_target_q_values(
@@ -142,17 +142,11 @@ class Agent:
 
     def train(self) -> None:
         """Train the agent."""
-        self.model.to(self.device)
-        self.target_model.to(self.device)
         with tqdm(total=self.train_steps) as pbar:
             for _ in range(0, self.train_steps, self.update_frequency):
                 self.experiment()
-                loss = self._learn()
+                self._learn()
                 pbar.update(self.update_frequency)
-                pbar.set_postfix(
-                    loss=loss,
-                    update=f"{self.learning_steps_counter}/{self.train_steps}",
-                )
                 self.learning_steps_counter += 1
                 if self.learning_steps_counter % self.target_update_frequency == 0:
                     self.target_model.load_state_dict(self.model.state_dict())
