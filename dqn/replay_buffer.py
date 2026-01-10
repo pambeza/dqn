@@ -13,18 +13,18 @@ class ReplayBuffer:
         self.capacity = config.capacity
         self.agent_history_length = config.agent_history_length
 
-        self.frames = np.empty((self.capacity, *frame_shape), dtype=np.uint8)
-        self.frame_numbers = np.empty(self.capacity, dtype=np.int32)
-        self.actions = np.empty(self.capacity, dtype=np.uint8)
-        self.rewards = np.empty(self.capacity, dtype=np.float32)
-        self.dones = np.empty(self.capacity, dtype=np.bool_)
+        self.frames = torch.empty((self.capacity, *frame_shape), dtype=torch.uint8)
+        self.frame_numbers = torch.empty(self.capacity, dtype=torch.int32)
+        self.actions = torch.empty(self.capacity, dtype=torch.uint8)
+        self.rewards = torch.empty(self.capacity, dtype=torch.float32)
+        self.dones = torch.empty(self.capacity, dtype=torch.bool)
 
         self.pos = 0
         self.size = 0
         self.full = False
 
     def store_initial_frame(self, frame: np.ndarray):
-        self.frames[self.pos] = frame
+        self.frames[self.pos] = torch.from_numpy(frame)
         self.frame_numbers[self.pos] = 0
 
     def store_experience(
@@ -44,7 +44,7 @@ class ReplayBuffer:
         if self.pos == 0:
             self.full = True
 
-        self.frames[self.pos] = next_frame
+        self.frames[self.pos] = torch.from_numpy(next_frame)
         self.frame_numbers[self.pos] = next_frame_number
 
     def _sample_indices(self, batch_size: int) -> np.ndarray:
@@ -71,7 +71,8 @@ class ReplayBuffer:
         indices = set()
         for _ in range(batch_size):
         # while len(indices) < batch_size:
-            idx = np.random.randint(0, upper_bound)
+            idx = torch.randint(low=0, high=upper_bound, size=(1,)).item()
+            # idx = np.random.randint(0, upper_bound)
 
             if self.full:
                 # Avoid picking an index in [pos - history_length, pos]
@@ -84,15 +85,15 @@ class ReplayBuffer:
 
             indices.add(idx)
 
-        return np.array(list(indices))
+        return torch.Tensor(list(indices)).to(torch.long)
 
     def _get_batch_states(self, indices: np.ndarray) -> np.ndarray:
         """Get the states for a batch of indices by modifying indices first."""
         batch_size = len(indices)
 
         # Create array of history indices, e.g [998, 999, 0, 1] for index 1
-        offsets = np.arange(self.agent_history_length) - (self.agent_history_length - 1)
-        history_indices = (indices[:, None] + offsets) % self.capacity
+        offsets = torch.arange(self.agent_history_length) - (self.agent_history_length - 1)
+        history_indices: torch.Tensor = (indices[:, None] + offsets) % self.capacity
 
         # Get array of valid indices by comparing history frame numbers to index frame number
         current_frame_numbers = self.frame_numbers[indices]
@@ -100,15 +101,14 @@ class ReplayBuffer:
         valid_mask = history_frame_numbers <= current_frame_numbers[:, None]
 
         # Get the first valid index for each row
-        first_valid_relative_idx = np.argmax(valid_mask, axis=1)
+        first_valid_relative_idx = torch.argmax(valid_mask.to(torch.uint8), dim=1)
 
         # Get array of first valid frame index for each row
-        fill_indices = history_indices[np.arange(batch_size), first_valid_relative_idx]
+        fill_indices = history_indices[torch.arange(batch_size), first_valid_relative_idx]
 
-        # 5. Remplacer TOUS les indices invalides par les fill_indices correspondants
         # Replace all invalid indices by the first valid frame indices
         invalid_mask = ~valid_mask
-        filler = np.repeat(fill_indices[:, None], self.agent_history_length, axis=1)
+        filler = torch.repeat_interleave(fill_indices[:, None], self.agent_history_length, dim=1)
         history_indices[invalid_mask] = filler[invalid_mask]
 
         states = self.frames[history_indices]
@@ -135,14 +135,12 @@ class ReplayBuffer:
         """
         indices = self._sample_indices(batch_size)
         next_indices = (indices + 1) % self.capacity
-
         states = self._get_batch_states(indices)
         next_states = self._get_batch_states(next_indices)
-
         return (
-            torch.from_numpy(states).to(torch.float32),
-            torch.from_numpy(self.actions[indices]).to(torch.int32),
-            torch.from_numpy(self.rewards[indices]),
-            torch.from_numpy(self.dones[indices]).to(torch.float32),
-            torch.from_numpy(next_states).to(torch.float32),
+            states.to(torch.float32),
+            self.actions[indices].to(torch.int32),
+            self.rewards[indices],
+            self.dones[indices].to(torch.float32),
+            next_states.to(torch.float32),
         )

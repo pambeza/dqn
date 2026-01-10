@@ -100,10 +100,13 @@ class Agent:
 
     def warmup(self) -> None:
         """Warm up the agent by performing random actions."""
+        device = self.device
+        self.device = torch.device("cpu")
         with tqdm(total=self.warmup_steps) as pbar:
             for _ in range(0, self.warmup_steps, self.update_frequency):
                 self.experiment(warming_up=True)
                 pbar.update(self.update_frequency)
+        self.device = device
 
     def _compute_target_q_values(
         self, next_states: torch.Tensor, rewards: torch.Tensor, dones: torch.Tensor
@@ -123,11 +126,11 @@ class Agent:
             current_states, actions, rewards, dones, next_states = (
                 self.replay_buffer.get_experience_samples(self.batch_size)
             )
-            current_states = current_states.to(self.device, non_blocking=True)
-            actions = actions.to(self.device, non_blocking=True)
-            rewards = rewards.to(self.device, non_blocking=True)
-            dones = dones.to(self.device, non_blocking=True)
-            next_states = next_states.to(self.device, non_blocking=True)
+            current_states = current_states.to(self.device)
+            actions = actions.to(self.device)
+            rewards = rewards.to(self.device)
+            dones = dones.to(self.device)
+            next_states = next_states.to(self.device)
             target_q_values = self._compute_target_q_values(next_states, rewards, dones)
 
         outputs = self.model(current_states)
@@ -142,6 +145,8 @@ class Agent:
 
     def train(self) -> None:
         """Train the agent."""
+        self.model.to(self.device)
+        self.target_model.to(self.device)
         with tqdm(total=self.train_steps) as pbar:
             for _ in range(0, self.train_steps, self.update_frequency):
                 self.experiment()

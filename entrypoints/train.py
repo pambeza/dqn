@@ -64,16 +64,14 @@ def main(config: TrainConfig, env: gym.Env, device: str, saved_model_path: str):
     device = torch.device(device)
     scheduler = LinearEpsilonScheduler(train_config.scheduler)
     model = Model(nb_valid_actions=env.action_space.n, epsilon_scheduler=scheduler)
-    model.to(device)
+    # model.to(device)
     target_model = Model(
         nb_valid_actions=env.action_space.n, epsilon_scheduler=scheduler
     )
-    target_model.to(device)
+    # target_model.to(device)
     replay_buffer = ReplayBuffer(
         config.replay_buffer, frame_shape=env.observation_space.shape[1:]
     )
-    model = torch.compile(model, fullgraph=True)
-    target_model = torch.compile(model, fullgraph=True)
     agent = Agent(
         config=config.agent,
         env=env,
