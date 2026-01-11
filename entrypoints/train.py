@@ -18,11 +18,19 @@ from gymnasium.wrappers import (
 from pydantic import BaseModel
 import torch
 
+NUM_ENVS = 16
+
+class EnvConfig(BaseModel):
+    env_name: str = "ALE/Breakout-v5"
+    frameskip: int = 4
+    render_mode: str = None
+
 
 class TrainConfig(BaseModel):
     scheduler: SchedulerConfig = SchedulerConfig()
     replay_buffer: ReplayBufferConfig = ReplayBufferConfig()
     agent: AgentConfig = AgentConfig()
+    env: EnvConfig = EnvConfig()
 
     @classmethod
     def from_yaml(cls, path: str) -> "TrainConfig":
@@ -38,9 +46,6 @@ parser.add_argument(
     dest="config",
     type=Path,
     help="Path to the training configuration file.",
-)
-parser.add_argument(
-    "--env", "-e", dest="env", type=str, default=None, help="Gymnasium environment"
 )
 parser.add_argument(
     "--device",
@@ -59,18 +64,28 @@ parser.add_argument(
     help="Path where the trained model will be saved.",
 )
 
+def make_env(env_config: EnvConfig) -> gym.Env:
+    def _init():
+        env = gym.make(env_config.env_name, frameskip=env_config.frameskip, render_mode=env_config.render_mode)
+        env = GrayscaleObservation(env, keep_dim=False)
+        # NOTE original paper mentions reshaping to (100,84) and then cropping to (84, 84)
+        env = ResizeObservation(env, shape=(84, 84))
+        env = FrameStackObservation(env, stack_size=4)
+        return env
+    return _init
 
 def main(config: TrainConfig, env: gym.Env, device: str, saved_model_path: str):
     device = torch.device(device)
     scheduler = LinearEpsilonScheduler(train_config.scheduler)
-    model = Model(nb_valid_actions=env.action_space.n, epsilon_scheduler=scheduler)
-    # model.to(device)
+    action_space = env.action_space[0].n
+    model = Model(nb_valid_actions=action_space, epsilon_scheduler=scheduler)
+    model.to(device)
     target_model = Model(
-        nb_valid_actions=env.action_space.n, epsilon_scheduler=scheduler
+        nb_valid_actions=action_space, epsilon_scheduler=scheduler
     )
     # target_model.to(device)
     replay_buffer = ReplayBuffer(
-        config.replay_buffer, frame_shape=env.observation_space.shape[1:]
+        config.replay_buffer, frame_shape=env.observation_space.shape[2:]
     )
     agent = Agent(
         config=config.agent,
@@ -89,10 +104,5 @@ if __name__ == "__main__":
     gym.register_envs(ale_py)
     args = vars(parser.parse_args())
     train_config = TrainConfig.from_yaml(args["config"])
-    env_name = args["env"] or "ALE/Breakout-v5"
-    env = gym.make(env_name, frameskip=4, render_mode=None)
-    env = GrayscaleObservation(env, keep_dim=False)
-    # NOTE original paper mentions reshaping to (100,84) and then cropping to (84, 84)
-    env = ResizeObservation(env, shape=(84, 84))
-    env = FrameStackObservation(env, stack_size=4)
+    env = gym.vector.AsyncVectorEnv([make_env(train_config.env) for _ in range(NUM_ENVS)])
     main(config=train_config, env=env, device=args["device"], saved_model_path=args["saved_model_path"])

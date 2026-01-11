@@ -39,13 +39,24 @@ class Model(nn.Module):
         return x
 
     @torch.no_grad()
-    def policy(self, state: torch.Tensor) -> int:
-        """Select an action based on the policy."""
-        if np.random.rand() < self.epsilon_scheduler.compute_epsilon(self.frames_count):
-            action = np.random.randint(self.nb_valid_actions)
-        else:
-            state = state.unsqueeze(dim=0).to(torch.float32)
-            q_values = self.forward(state)
-            action = q_values.argmax(dim=1).item()
-        self.frames_count += 1
-        return action
+    def policy(self, states: torch.Tensor) -> np.ndarray:
+        """Select actions for a batch of states based on the epsilon-greedy policy."""
+        batch_size = states.shape[0]
+        epsilon = self.epsilon_scheduler.compute_epsilon(self.frames_count)
+        
+        # Determine which environments will perform random actions
+        random_actions_mask = np.random.rand(batch_size) < epsilon
+        
+        # Get greedy actions from the model
+        normalized_states = states.to(torch.float32) / 255.0
+        q_values = self.forward(normalized_states)
+        greedy_actions = q_values.argmax(dim=1).cpu().numpy()
+        
+        # Get random actions
+        random_actions = np.random.randint(0, self.nb_valid_actions, size=batch_size)
+        
+        # Combine actions
+        actions = np.where(random_actions_mask, random_actions, greedy_actions)
+        
+        self.frames_count += batch_size
+        return actions

@@ -24,68 +24,71 @@ class ReplayBuffer:
         self.full = False
 
     def store_initial_frame(self, frame: np.ndarray):
-        self.frames[self.pos] = torch.from_numpy(frame)
-        self.frame_numbers[self.pos] = 0
+        num_envs = frame.shape[0]
+        # For simplicity in vectorized envs, we assume we store the initial frame 
+        # for all envs at once or we don't use this method as much.
+        # However, we need to handle the case where frame is (num_envs, 1, 84, 84)
+        indices = (self.pos + torch.arange(num_envs)) % self.capacity
+        self.frames[indices] = torch.from_numpy(frame)
+        self.frame_numbers[indices] = 0
+        # self.pos is NOT updated here normally in the original code, 
+        # but in vectorized envs we might need to be careful.
+        # The original code only stored ONE frame.
 
     def store_experience(
         self,
-        action: int,
-        reward: float,
-        done: bool,
-        next_frame: np.ndarray,
-        next_frame_number: int,
+        actions: np.ndarray,
+        rewards: np.ndarray,
+        dones: np.ndarray,
+        next_frames: np.ndarray,
+        next_frame_numbers: np.ndarray,
     ):
-        self.actions[self.pos] = action
-        self.rewards[self.pos] = reward
-        self.dones[self.pos] = done
+        num_envs = actions.shape[0]
+        # Calculate indices for the whole batch
+        indices = (self.pos + torch.arange(num_envs)) % self.capacity
+        
+        self.actions[indices] = torch.from_numpy(actions).byte()
+        self.rewards[indices] = torch.from_numpy(rewards).float()
+        self.dones[indices] = torch.from_numpy(dones).bool()
+        self.frames[indices] = torch.from_numpy(next_frames)
+        self.frame_numbers[indices] = torch.from_numpy(next_frame_numbers).int()
 
-        self.pos = (self.pos + 1) % self.capacity
-        self.size = min(self.size + 1, self.capacity)
-        if self.pos == 0:
+        self.pos = (self.pos + num_envs) % self.capacity
+        self.size = min(self.size + num_envs, self.capacity)
+        if self.size == self.capacity:
             self.full = True
 
-        self.frames[self.pos] = torch.from_numpy(next_frame)
-        self.frame_numbers[self.pos] = next_frame_number
-
-    def _sample_indices(self, batch_size: int) -> np.ndarray:
-        """Randomly select indices from the replay memory.
-
-        Indices selection follows these rules:
-            - Avoid picking an index in [pos - history_length, pos] to avoid mixing transitions from different episodes.
-            - Avoid picking an index for which s_t+1 does not exist (i.e. the last transition of an episode).
-            - No replacement
-
-        Args:
-            batch_size: Number of indices to select.
-
-        Returns:
-            A numpy array of indices.
-        """
-        # -1 to avoid picking the last element that does not have transition yet
+    def _sample_indices(self, batch_size: int) -> torch.Tensor:
+        """Randomly select indices from the replay memory using vectorization."""
         upper_bound = self.size - 1
         if upper_bound < batch_size:
             raise ValueError(
-                f"Unable to get {batch_size} samples.Replay memory only contains {upper_bound} experiences."
+                f"Unable to get {batch_size} samples. Replay memory only contains {upper_bound} experiences."
             )
 
-        indices = set()
-        for _ in range(batch_size):
-        # while len(indices) < batch_size:
-            idx = torch.randint(low=0, high=upper_bound, size=(1,)).item()
-            # idx = np.random.randint(0, upper_bound)
-
-            if self.full:
-                # Avoid picking an index in [pos - history_length, pos]
-                if self.pos - self.agent_history_length <= idx <= self.pos:
-                    continue
-
-            # No valid s_t+1 for the last episode transition
-            if self.dones[idx]:
-                continue
-
-            indices.add(idx)
-
-        return torch.Tensor(list(indices)).to(torch.long)
+        # Sample more than needed to account for invalid indices (dones, etc.)
+        candidate_indices = torch.randint(0, upper_bound, (batch_size * 2,))
+        
+        # 1. Mask out s_t that are "dones" (no s_t+1 exists)
+        valid_mask = ~self.dones[candidate_indices]
+        
+        # 2. Mask out indices in the current transition range (to avoid mixing different episodes)
+        if self.full:
+            # Check for range [pos - history, pos] including circular wrap
+            within_pos_range = (candidate_indices >= (self.pos - self.agent_history_length)) & (candidate_indices <= self.pos)
+            if self.pos < self.agent_history_length:
+                # Handle wrap around at the end of the buffer
+                within_pos_range |= (candidate_indices >= (self.capacity - (self.agent_history_length - self.pos)))
+            valid_mask &= ~within_pos_range
+            
+        valid_indices = candidate_indices[valid_mask]
+        
+        # If we didn't get enough, just take what we need from a fresh random sample 
+        # (This is a rare fallback)
+        if len(valid_indices) < batch_size:
+            return torch.randint(0, upper_bound, (batch_size,))
+            
+        return valid_indices[:batch_size]
 
     def _get_batch_states(self, indices: np.ndarray) -> np.ndarray:
         """Get the states for a batch of indices by modifying indices first."""
@@ -137,10 +140,4 @@ class ReplayBuffer:
         next_indices = (indices + 1) % self.capacity
         states = self._get_batch_states(indices)
         next_states = self._get_batch_states(next_indices)
-        return (
-            states.to(torch.float32),
-            self.actions[indices].to(torch.int32),
-            self.rewards[indices],
-            self.dones[indices].to(torch.float32),
-            next_states.to(torch.float32),
-        )
+        return states, self.actions[indices], self.rewards[indices], self.dones[indices], next_states

@@ -11,6 +11,19 @@ from tqdm import tqdm
 writer = SummaryWriter()
 
 
+@torch.jit.script
+def fused_target_q_calculation(
+    rewards: torch.Tensor,
+    dones: torch.Tensor,
+    gamma: float,
+    next_state_max_q_values: torch.Tensor,
+) -> torch.Tensor:
+    return (
+        rewards.unsqueeze(dim=1)
+        + (1 - dones.unsqueeze(dim=1)) * gamma * next_state_max_q_values
+    )
+
+
 class AgentConfig(BaseModel):
     batch_size: int = 32
     gamma: float = 0.99
@@ -41,7 +54,9 @@ class Agent:
         self.target_model = target_model
         self.device = device
 
+        self.num_envs = getattr(env, "num_envs", 1)
         self.learning_steps_counter = 0
+        self.episode_rewards = np.zeros(self.num_envs)
         self.state = self._set_initial_state()
 
         self.loss_fn = torch.nn.SmoothL1Loss()
@@ -50,13 +65,13 @@ class Agent:
         self.gamma = config.gamma
 
         self.episode_count = 0
-        self.episode_reward = 0
-        self.max_frame_number = 0
+        self.max_frame_numbers = np.zeros(self.num_envs)
 
     def _set_initial_state(self) -> np.ndarray:
-        """Reset the agent's environment and store the initial frame in the replay buffer."""
+        """Reset the agent's environment and store initial frames in the replay buffer."""
         state, _ = self.env.reset()
-        self.replay_buffer.store_initial_frame(state[-1:])
+        # next_frame is expected to be (num_envs, 84, 84)
+        self.replay_buffer.store_initial_frame(state[:, -1])
         return state
 
     def experiment(
@@ -70,42 +85,52 @@ class Agent:
                 Otherwise, the model policy is used.Defaults to False.
         """
         for _ in range(self.update_frequency):
-            state = torch.from_numpy(self.state).to(self.device)
             if warming_up:
-                action = self.env.action_space.sample()
+                actions = self.env.action_space.sample()
             else:
-                action = self.model.policy(state)
-            new_state, reward, done, truncated, info = self.env.step(action)
-            episode_frame_number = info["episode_frame_number"]
-            self.max_frame_number = episode_frame_number
+                state_tensor = torch.from_numpy(self.state).to(self.device).byte()
+                actions = self.model.policy(state_tensor)
+            
+            new_state, rewards, dones, truncated, infos = self.env.step(actions)
+            
+            # In AsyncVectorEnv, infos stores arrays for the batch
+            episode_frame_numbers = infos["episode_frame_number"]
+            
+            # Store experience batch (we take the last frame of the stack)
             self.replay_buffer.store_experience(
-                action, reward, done, new_state[-1:], episode_frame_number
+                actions, rewards, dones, new_state[:, -1], episode_frame_numbers
             )
-            self.episode_reward += reward
-            if done:
-                new_state = self._set_initial_state()
-                if not warming_up:
-                    self.episode_count += 1
-                    writer.add_scalar(
-                        "Episode reward", self.episode_reward, self.episode_count
-                    )
-                    writer.add_scalar(
-                        "Maximum episode frame number",
-                        self.max_frame_number,
-                        self.episode_count,
-                    )
-                    self.episode_reward = 0
-                    self.max_frame_number = 0
+            
+            self.episode_rewards += rewards
+            self.max_frame_numbers = np.maximum(self.max_frame_numbers, episode_frame_numbers)
+
+            # Check for episodes that ended
+            for i in range(self.num_envs):
+                if dones[i] or truncated[i]:
+                    if not warming_up:
+                        self.episode_count += 1
+                        writer.add_scalar(
+                            "Episode reward", self.episode_rewards[i], self.episode_count
+                        )
+                        writer.add_scalar(
+                            "Maximum episode frame number",
+                            self.max_frame_numbers[i],
+                            self.episode_count,
+                        )
+                    self.episode_rewards[i] = 0
+                    self.max_frame_numbers[i] = 0
+            
             self.state = new_state
 
     def warmup(self) -> None:
         """Warm up the agent by performing random actions."""
         device = self.device
         self.device = torch.device("cpu")
-        with tqdm(total=self.warmup_steps) as pbar:
-            for _ in range(0, self.warmup_steps, self.update_frequency):
+        steps_per_experiment = self.update_frequency * self.num_envs
+        with tqdm(total=self.warmup_steps, desc="Warming up") as pbar:
+            for _ in range(0, self.warmup_steps, steps_per_experiment):
                 self.experiment(warming_up=True)
-                pbar.update(self.update_frequency)
+                pbar.update(steps_per_experiment)
         self.device = device
 
     def _compute_target_q_values(
@@ -114,9 +139,8 @@ class Agent:
         next_state_max_q_values = self.target_model(next_states).max(
             dim=1, keepdim=True
         )[0]
-        target_q_values = (
-            rewards.unsqueeze(dim=1)
-            + (1 - dones.unsqueeze(dim=1)) * self.gamma * next_state_max_q_values
+        target_q_values = fused_target_q_calculation(
+            rewards, dones, self.gamma, next_state_max_q_values
         )
         return target_q_values
 
@@ -126,11 +150,11 @@ class Agent:
             current_states, actions, rewards, dones, next_states = (
                 self.replay_buffer.get_experience_samples(self.batch_size)
             )
-            current_states = current_states.to(self.device)
-            actions = actions.to(self.device)
-            rewards = rewards.to(self.device)
-            dones = dones.to(self.device)
-            next_states = next_states.to(self.device)
+            current_states = current_states.to(self.device, non_blocking=True, dtype=torch.float32) / 255
+            actions = actions.to(self.device, non_blocking=True, dtype=torch.int32)
+            rewards = rewards.to(self.device, non_blocking=True, dtype=torch.float32)
+            dones = dones.to(self.device, non_blocking=True, dtype=torch.float32)
+            next_states = next_states.to(self.device, non_blocking=True, dtype=torch.float32) / 255
             target_q_values = self._compute_target_q_values(next_states, rewards, dones)
 
         outputs = self.model(current_states)
@@ -147,11 +171,12 @@ class Agent:
         """Train the agent."""
         self.model.to(self.device)
         self.target_model.to(self.device)
-        with tqdm(total=self.train_steps) as pbar:
-            for _ in range(0, self.train_steps, self.update_frequency):
+        steps_per_experiment = self.update_frequency * self.num_envs
+        with tqdm(total=self.train_steps, desc="Training") as pbar:
+            for _ in range(0, self.train_steps, steps_per_experiment):
                 self.experiment()
                 self._learn()
-                pbar.update(self.update_frequency)
+                pbar.update(steps_per_experiment)
                 self.learning_steps_counter += 1
                 if self.learning_steps_counter % self.target_update_frequency == 0:
                     self.target_model.load_state_dict(self.model.state_dict())
